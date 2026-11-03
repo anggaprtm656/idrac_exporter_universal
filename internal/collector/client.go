@@ -160,6 +160,12 @@ func (client *Client) findAllEndpoints() bool {
 
 	// Paths
 	client.path.Storage = system.Storage.OdataId
+	if client.path.Storage == "" && client.path.System != "" {
+		smartStoragePath := client.path.System + "/SmartStorage/ArrayControllers"
+		if client.redfish.Exists(smartStoragePath) {
+			client.path.Storage = smartStoragePath
+		}
+	}
 	client.path.SimpleStorage = system.SimpleStorage.OdataId
 	client.path.Memory = system.Memory.OdataId
 	client.path.Network = chassis.NetworkAdapters.OdataId
@@ -214,12 +220,10 @@ func (client *Client) findAllEndpoints() bool {
 		}
 	}
 
-	// Manager
-	if client.metrics.Manager.Enabled {
-		ok = client.redfish.Get(root.Managers.OdataId, &group)
-		if ok && len(group.Members) > 0 {
-			client.path.Manager = group.Members[0].OdataId
-		}
+	// Manager (Always fetch dynamically for all vendors: Dell, HPE, Lenovo, Fujitsu, etc.)
+	ok = client.redfish.Get(root.Managers.OdataId, &group)
+	if ok && len(group.Members) > 0 {
+		client.path.Manager = group.Members[0].OdataId
 	}
 
 	// Manager event log
@@ -430,7 +434,7 @@ func (client *Client) RefreshSensorsOld(mc *Collector, ch chan<- prometheus.Metr
 
 		units := f.GetUnits()
 		if units == "" {
-			continue
+			units = "rpm"
 		}
 
 		id := f.GetId(n)
@@ -460,27 +464,59 @@ func (client *Client) RefreshSensors(mc *Collector, ch chan<- prometheus.Metric)
 }
 
 func (client *Client) RefreshSystem(mc *Collector, ch chan<- prometheus.Metric) bool {
-	resp := SystemResponse{}
-	ok := client.redfish.Get(client.path.System, &resp)
-	if !ok {
-		return false
-	}
+        resp := SystemResponse{}
+        ok := client.redfish.Get(client.path.System, &resp)
+        if !ok {
+                return false
+        }
 
-	// Need on iLO 6
-	if client.vendor == HPE && resp.IndicatorLED == "" {
-		resp.IndicatorLED = resp.Oem.Hpe.IndicatorLED
-	}
+        // Need on iLO 6
+        if client.vendor == HPE && resp.IndicatorLED == "" {
+                resp.IndicatorLED = resp.Oem.Hpe.IndicatorLED
+        }
 
-	mc.NewSystemPowerOn(ch, &resp)
-	mc.NewSystemHealth(ch, &resp)
-	mc.NewSystemIndicatorLED(ch, &resp)
-	mc.NewSystemIndicatorActive(ch, &resp)
-	mc.NewSystemMemorySize(ch, &resp)
-	mc.NewSystemCpuCount(ch, &resp)
-	mc.NewSystemBiosInfo(ch, &resp)
-	mc.NewSystemMachineInfo(ch, &resp)
+        // --- BACA SECARA DINAMIS DARI BMC COLLECTION ---
+        var eth ManagerEthernetInterfaceResponse
+        managerPath := client.path.Manager
+        if managerPath == "" {
+                switch client.vendor {
+                case DELL:
+                        managerPath = "/redfish/v1/Managers/iDRAC.Embedded.1"
+                case FUJITSU:
+                        managerPath = "/redfish/v1/Managers/iRMC"
+                case HPE, LENOVO:
+                        managerPath = "/redfish/v1/Managers/1"
+                }
+        }
+        if managerPath != "" {
+                var ethCol struct {
+                        Members []struct {
+                                OdataId string `json:"@odata.id"`
+                        } `json:"Members"`
+                }
+                if client.redfish.Get(managerPath+"/EthernetInterfaces", &ethCol) && len(ethCol.Members) > 0 {
+                        client.redfish.Get(ethCol.Members[0].OdataId, &eth)
+                } else {
+                        client.redfish.Get(managerPath+"/EthernetInterfaces/NIC.1", &eth)
+                }
+        }
+        if eth.HostName != "" {
+                resp.BmcName = eth.HostName
+        } else {
+                resp.BmcName = resp.HostName
+        }
+        // -----------------------------------------------
 
-	return true
+        mc.NewSystemPowerOn(ch, &resp)
+        mc.NewSystemHealth(ch, &resp)
+        mc.NewSystemIndicatorLED(ch, &resp)
+        mc.NewSystemIndicatorActive(ch, &resp)
+        mc.NewSystemMemorySize(ch, &resp)
+        mc.NewSystemCpuCount(ch, &resp)
+        mc.NewSystemBiosInfo(ch, &resp)
+        mc.NewSystemMachineInfo(ch, &resp)
+
+        return true
 }
 
 func (client *Client) RefreshManager(mc *Collector, ch chan<- prometheus.Metric) bool {
@@ -561,15 +597,47 @@ func (client *Client) RefreshProcessors(mc *Collector, ch chan<- prometheus.Metr
 	return true
 }
 
+func (client *Client) refreshSystemEthernetInterfaces(mc *Collector, ch chan<- prometheus.Metric) bool {
+	if client.path.System == "" {
+		return true
+	}
+	group := GroupResponse{}
+	if client.redfish.Get(client.path.System+"/EthernetInterfaces", &group) && len(group.Members) > 0 {
+		for _, c := range group.Members.GetLinks() {
+			var iface EthernetInterfaceResponse
+			if client.redfish.Get(c, &iface) {
+				adapter := NetworkAdapter{
+					Id:     iface.Id,
+					Name:   iface.Name,
+					Status: iface.Status,
+				}
+				mc.NewNetworkAdapterInfo(ch, &adapter)
+				mc.NewNetworkAdapterHealth(ch, &adapter)
+
+				port := NetworkPort{
+					Id:                   iface.Id,
+					CurrentLinkSpeedMbps: iface.SpeedMbps,
+					LinkStatus:           iface.LinkStatus,
+					Status:               iface.Status,
+				}
+				mc.NewNetworkPortHealth(ch, iface.Id, &port)
+				mc.NewNetworkPortCurrentSpeed(ch, iface.Id, &port)
+				mc.NewNetworkPortLinkUp(ch, iface.Id, &port)
+			}
+		}
+	}
+	return true
+}
+
 func (client *Client) RefreshNetwork(mc *Collector, ch chan<- prometheus.Metric) bool {
 	if client.path.Network == "" {
-		return true
+		return client.refreshSystemEthernetInterfaces(mc, ch)
 	}
 
 	group := GroupResponse{}
 	ok := client.redfish.Get(client.path.Network, &group)
-	if !ok {
-		return false
+	if !ok || len(group.Members) == 0 {
+		return client.refreshSystemEthernetInterfaces(mc, ch)
 	}
 
 	for _, c := range group.Members.GetLinks() {
@@ -721,6 +789,25 @@ func (client *Client) RefreshPowerOld(mc *Collector, ch chan<- prometheus.Metric
 		}
 	}
 
+	// Fallback calculation: if per-PSU output watts is 0/unavailable, share total consumed watts across active PSUs
+	activePsuCount := 0
+	for _, psu := range resp.PowerSupplies {
+		if psu.Status.State != StateAbsent {
+			activePsuCount++
+		}
+	}
+	var totalConsumedWatts float64
+	for _, pc := range resp.PowerControl {
+		if pc.PowerConsumedWatts > 0 {
+			totalConsumedWatts += pc.PowerConsumedWatts
+			break
+		}
+	}
+	var psuShareWatts float64
+	if activePsuCount > 0 && totalConsumedWatts > 0 {
+		psuShareWatts = totalConsumedWatts / float64(activePsuCount)
+	}
+
 	for i, psu := range resp.PowerSupplies {
 		// Issue #116
 		if (client.vendor == HPE) && (client.version == 4) {
@@ -741,10 +828,16 @@ func (client *Client) RefreshPowerOld(mc *Collector, ch chan<- prometheus.Metric
 		} else {
 			mc.NewPowerSupplyInputWatts(ch, psu.PowerInputWatts, id)
 		}
+
+		outWatts := psu.GetOutputPower()
 		if client.vendor == HUAWEI && psu.Oem.Huawei != nil && psu.Oem.Huawei.PowerOutputWatts > 0 {
 			mc.NewPowerSupplyOutputWatts(ch, psu.Oem.Huawei.PowerOutputWatts, id)
+		} else if outWatts > 0 {
+			mc.NewPowerSupplyOutputWatts(ch, outWatts, id)
+		} else if psuShareWatts > 0 {
+			mc.NewPowerSupplyOutputWatts(ch, psuShareWatts, id)
 		} else {
-			mc.NewPowerSupplyOutputWatts(ch, psu.GetOutputPower(), id)
+			mc.NewPowerSupplyOutputWatts(ch, 0, id)
 		}
 
 		mc.NewPowerSupplyInputVoltage(ch, psu.LineInputVoltage, id)
@@ -890,17 +983,29 @@ func (client *Client) RefreshSimpleStorage(mc *Collector, ch chan<- prometheus.M
 }
 
 func (client *Client) RefreshStorage(mc *Collector, ch chan<- prometheus.Metric) bool {
-	if client.path.Storage == "" {
+	group := GroupResponse{}
+	var ok bool
+
+	if client.path.Storage != "" {
+		ok = client.redfish.Get(client.path.Storage, &group)
+	}
+
+	// HPE iLO SmartStorage fallback if /Storage is empty or missing
+	if !ok || len(group.Members) == 0 {
+		if client.path.System != "" && client.path.Storage != client.path.System+"/SmartStorage/ArrayControllers" {
+			smartStoragePath := client.path.System + "/SmartStorage/ArrayControllers"
+			if client.redfish.Get(smartStoragePath, &group) && len(group.Members) > 0 {
+				client.path.Storage = smartStoragePath
+				ok = true
+			}
+		}
+	}
+
+	if !ok || len(group.Members) == 0 {
 		if client.path.SimpleStorage != "" {
 			return client.RefreshSimpleStorage(mc, ch)
 		}
 		return true
-	}
-
-	group := GroupResponse{}
-	ok := client.redfish.Get(client.path.Storage, &group)
-	if !ok {
-		return false
 	}
 	re := regexp.MustCompile(`Chassis\/([^\/]+)`)
 
@@ -911,14 +1016,16 @@ func (client *Client) RefreshStorage(mc *Collector, ch chan<- prometheus.Metric)
 			return false
 		}
 
-		// iLO 4
-		if (client.vendor == HPE) && (client.version == 4) {
-			grp := GroupResponse{}
-			ok = client.redfish.Get(c+"DiskDrives/", &grp)
-			if !ok {
-				return false
+		// Check DiskDrives fallback (HPE iLO 4/5/6 and non-standard vendors)
+		if len(storage.Drives.GetLinks()) == 0 {
+			if len(storage.DiskDrives.GetLinks()) > 0 {
+				storage.Drives = storage.DiskDrives
+			} else {
+				grp := GroupResponse{}
+				if client.redfish.Get(c+"DiskDrives/", &grp) || client.redfish.Get(c+"/DiskDrives", &grp) || client.redfish.Get(c+"/DiskDrives/", &grp) {
+					storage.Drives = grp.Members
+				}
 			}
-			storage.Drives = grp.Members
 		}
 
 		mc.NewStorageInfo(ch, &storage)

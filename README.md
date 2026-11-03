@@ -1,4 +1,14 @@
-# iDRAC Exporter
+# iDRAC Exporter (Multi-Vendor Stateless Fork)
+
+> [!NOTE]
+> **Fork & Attribution Notice:**  
+> This repository is a fork of the original [mrlhansen/idrac_exporter](https://github.com/mrlhansen/idrac_exporter) created by [Martin Hansen](https://github.com/mrlhansen).  
+> All credit and appreciation for the original design, architecture, and core codebase belong to the original author and its contributors under the [MIT License](LICENSE).
+>
+> **Key Improvements in this Fork:**
+> * **Pure Stateless HTTP Basic Auth**: Replaced stateful Redfish sessions with stateless HTTP Basic Authentication headers. This completely eliminates session exhaustion errors (`401 Unauthorized` / `Max sessions exceeded`) and metric flapping on multi-vendor BMCs (tested on **Fujitsu iRMC**, **HPE iLO**, **Dell iDRAC**, and **Lenovo XCC**).
+> * Multi-vendor fleet monitoring optimizations.
+
 This is a simple Redfish (iDRAC, iLO, XClarity) exporter for [Prometheus](https://prometheus.io). The exporter uses the Redfish API to collect information and it supports the regular `/metrics` endpoint to expose metrics from the host passed via the `target` parameter. For example, to scrape metrics from a Redfish instance on the IP address `192.168.1.1` call the following URL address.
 
 ```text
@@ -337,3 +347,9 @@ Example of [grafana/idrac_overview.json](grafana/idrac_overview.json) which show
 Example of [grafana/status-alternative.json](grafana/status-alternative.json) which shows detailed information for individual machines.
 
 ![alternative.png](grafana/alternative.png)
+
+
+## Credits & Acknowledgments
+* **Original Project:** [mrlhansen/idrac_exporter](https://github.com/mrlhansen/idrac_exporter)
+* **Original Author:** [Martin Hansen](https://github.com/mrlhansen) and all upstream contributors.
+* **License:** [MIT License](LICENSE)

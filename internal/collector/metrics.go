@@ -145,6 +145,7 @@ func (mc *Collector) NewSystemMachineInfo(ch chan<- prometheus.Metric, m *System
 		strings.TrimSpace(m.SerialNumber),
 		strings.TrimSpace(m.SKU),
 		strings.TrimSpace(m.HostName),
+		strings.TrimSpace(m.BmcName),
 	)
 }
 

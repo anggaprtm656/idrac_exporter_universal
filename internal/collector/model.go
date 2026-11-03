@@ -339,6 +339,7 @@ type Storage struct {
 	Name               string              `json:"Name"`
 	Description        string              `json:"Description"`
 	Drives             OdataSlice          `json:"Drives"`
+	DiskDrives         OdataSlice          `json:"DiskDrives"`
 	Controllers        Odata               `json:"Controllers"`
 	Volumes            Odata               `json:"Volumes"`
 	Status             Status              `json:"Status"`
@@ -544,6 +545,7 @@ type SystemResponse struct {
 	PartNumber              string `json:"PartNumber"`
 	Description             string `json:"Description"`
 	HostName                string `json:"HostName"`
+	BmcName                 string
 	PowerState              string `json:"PowerState"`
 	Bios                    Odata  `json:"Bios"`
 	BiosVersion             string `json:"BiosVersion"`
@@ -983,4 +985,16 @@ type PowerDistributionMetrics struct {
 		DataSourceUri string  `json:"DataSourceUri"`
 		Reading       float64 `json:"Reading"`
 	} `json:"EnergykWh"`
+}
+
+type ManagerEthernetInterfaceResponse struct {
+    HostName string `json:"HostName"`
+}
+
+type EthernetInterfaceResponse struct {
+	Id         string  `json:"Id"`
+	Name       string  `json:"Name"`
+	LinkStatus string  `json:"LinkStatus"`
+	SpeedMbps  float64 `json:"SpeedMbps"`
+	Status     Status  `json:"Status"`
 }

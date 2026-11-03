@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	neturl "net/url"
-	"path"
 	"strings"
 	"time"
 
@@ -72,7 +70,7 @@ func NewRedfish(host string, auth *config.AuthConfig) *Redfish {
 		username: auth.Username,
 		password: auth.Password,
 		session: RedfishSession{
-			disabled: auth.BasicAuth,
+			disabled: true,
 		},
 		http: &http.Client{
 			Transport: &http.Transport{
@@ -92,154 +90,21 @@ func NewRedfish(host string, auth *config.AuthConfig) *Redfish {
 
 func (r *Redfish) DisableSession() {
 	r.session.disabled = true
-	r.session.token = ""
-	r.session.id = ""
-	log.Info("Session authentication disabled for %s due to failed creation or refresh", r.hostname)
 }
 
 func (r *Redfish) CreateSession() bool {
-	if r.session.disabled {
-		return false
-	}
-
-	url := fmt.Sprintf("%s/redfish/v1/SessionService/Sessions", r.baseurl)
-	session := Session{
-		Username: r.username,
-		Password: r.password,
-	}
-	body, _ := json.Marshal(&session)
-
-	resp, err := r.http.Post(url, "application/json", bytes.NewBuffer(body))
-	defer func() {
-		if resp != nil {
-			resp.Body.Close()
-		}
-	}()
-	if err != nil {
-		log.Error("Failed to query %q: %v", url, err)
-		return false
-	}
-
-	// iDRAC 8
-	// https://dl.dell.com/topicspdf/idrac9-lifecycle-controller-v4x-series_api-guide_en-us.pdf
-	// mentions that old URL for session management was /redfish/v1/Sessions and
-	// the new URL is /redfish/v1/SessionService/Sessions which implies earlier iDRAC
-	// versions used the former.
-	if resp.StatusCode == http.StatusMethodNotAllowed {
-		if resp != nil {
-			resp.Body.Close()
-		}
-
-		url = fmt.Sprintf("%s/redfish/v1/Sessions", r.baseurl)
-		resp, err = r.http.Post(url, "application/json", bytes.NewBuffer(body))
-		if err != nil {
-			r.DisableSession()
-			return false
-		}
-	}
-
-	if resp.StatusCode != http.StatusCreated {
-		log.Error("Unexpected status code from %q: %s", url, resp.Status)
-		return false
-	}
-
-	err = json.NewDecoder(resp.Body).Decode(&session)
-	if err != nil {
-		log.Error("Error decoding response from %q: %v", url, err)
-		return false
-	}
-
-	r.session.id = session.OdataId
-	r.session.token = resp.Header.Get("X-Auth-Token")
-
-	// iLO 4
-	if len(r.session.id) == 0 {
-		u, err := neturl.Parse(resp.Header.Get("Location"))
-		if err == nil {
-			r.session.id = u.Path
-		}
-	}
-
-	log.Debug("Succesfully created session: %s", path.Base(r.session.id))
+	// Stateless HTTP Basic Auth: do not create Redfish sessions on BMC
+	log.Debug("Stateless HTTP Basic Auth active for %s (no Redfish session)", r.hostname)
 	return true
 }
 
 func (r *Redfish) DeleteSession() bool {
-	if len(r.session.token) == 0 {
-		return true
-	}
-
-	url := fmt.Sprintf("%s%s", r.baseurl, r.session.id)
-	req, err := http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		return false
-	}
-
-	req.Header.Add("Accept", "application/json")
-	req.Header.Set("X-Auth-Token", r.session.token)
-
-	resp, err := r.http.Do(req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	if err != nil {
-		log.Error("Failed to query %q: %v", url, err)
-		return false
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		log.Error("Unexpected status code from %q: %s", url, resp.Status)
-		return false
-	}
-
-	log.Debug("Succesfully deleted session: %s", path.Base(r.session.id))
-	r.session.id = ""
-	r.session.token = ""
-
+	// Stateless HTTP Basic Auth: no session to delete
 	return true
 }
 
 func (r *Redfish) RefreshSession() bool {
-	if r.session.disabled {
-		return false
-	}
-
-	if len(r.session.token) == 0 {
-		ok := r.CreateSession()
-		if !ok {
-			r.DisableSession()
-		}
-		return ok
-	}
-
-	url := fmt.Sprintf("%s%s", r.baseurl, r.session.id)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return false
-	}
-
-	req.Header.Add("Accept", "application/json")
-	req.Header.Set("X-Auth-Token", r.session.token)
-
-	resp, err := r.http.Do(req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	if err != nil {
-		return false
-	}
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
-		ok := r.CreateSession()
-		if !ok {
-			r.DisableSession()
-		}
-		return ok
-	} else if resp.StatusCode != http.StatusOK {
-		log.Error("Unexpected status code %d during session refresh", resp.StatusCode)
-		return false
-	}
-
+	// Stateless HTTP Basic Auth: no session refresh needed
 	return true
 }
 
@@ -257,12 +122,9 @@ func (r *Redfish) Get(path string, res any) bool {
 		return false
 	}
 
-	req.Header.Add("Accept", "application/json")
-	if len(r.session.token) > 0 {
-		req.Header.Set("X-Auth-Token", r.session.token)
-	} else {
-		req.SetBasicAuth(r.username, r.password)
-	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("OData-Version", "4.0")
+	req.SetBasicAuth(r.username, r.password)
 
 	log.Debug("Querying %q", url)
 	resp, err := r.http.Do(req)
@@ -312,12 +174,9 @@ func (r *Redfish) Exists(path string) bool {
 		return false
 	}
 
-	req.Header.Add("Accept", "application/json")
-	if len(r.session.token) > 0 {
-		req.Header.Set("X-Auth-Token", r.session.token)
-	} else {
-		req.SetBasicAuth(r.username, r.password)
-	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("OData-Version", "4.0")
+	req.SetBasicAuth(r.username, r.password)
 
 	resp, err := r.http.Do(req)
 	if resp != nil {
