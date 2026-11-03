@@ -499,11 +499,25 @@ func (client *Client) RefreshSystem(mc *Collector, ch chan<- prometheus.Metric) 
                 } else {
                         client.redfish.Get(managerPath+"/EthernetInterfaces/NIC.1", &eth)
                 }
+
+                // If EthernetInterfaces didn't have HostName, check NetworkProtocol
+                if eth.HostName == "" {
+                        var netProto struct {
+                                HostName string `json:"HostName"`
+                        }
+                        if client.redfish.Get(managerPath+"/NetworkProtocol", &netProto) && netProto.HostName != "" {
+                                eth.HostName = netProto.HostName
+                        }
+                }
         }
+
+        // Set BmcName without EVER falling back to OS Hostname (resp.HostName)
         if eth.HostName != "" {
                 resp.BmcName = eth.HostName
+        } else if client.vendor == DELL && resp.SKU != "" {
+                resp.BmcName = "idrac-" + strings.ToLower(resp.SKU)
         } else {
-                resp.BmcName = resp.HostName
+                resp.BmcName = client.redfish.hostname
         }
         // -----------------------------------------------
 

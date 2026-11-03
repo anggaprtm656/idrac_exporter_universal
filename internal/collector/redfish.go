@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -70,7 +71,7 @@ func NewRedfish(host string, auth *config.AuthConfig) *Redfish {
 		username: auth.Username,
 		password: auth.Password,
 		session: RedfishSession{
-			disabled: true,
+			disabled: auth.BasicAuth,
 		},
 		http: &http.Client{
 			Transport: &http.Transport{
@@ -90,21 +91,143 @@ func NewRedfish(host string, auth *config.AuthConfig) *Redfish {
 
 func (r *Redfish) DisableSession() {
 	r.session.disabled = true
+	r.session.token = ""
+	r.session.id = ""
+	log.Info("Session authentication disabled for %s, falling back to Basic Auth", r.hostname)
 }
 
 func (r *Redfish) CreateSession() bool {
-	// Stateless HTTP Basic Auth: do not create Redfish sessions on BMC
-	log.Debug("Stateless HTTP Basic Auth active for %s (no Redfish session)", r.hostname)
+	if r.session.disabled {
+		return false
+	}
+
+	url := fmt.Sprintf("%s/redfish/v1/SessionService/Sessions", r.baseurl)
+	session := Session{
+		Username: r.username,
+		Password: r.password,
+	}
+	body, _ := json.Marshal(&session)
+
+	resp, err := r.http.Post(url, "application/json", bytes.NewBuffer(body))
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		log.Error("Failed to query %q: %v", url, err)
+		r.DisableSession()
+		return false
+	}
+
+	// iDRAC 8
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		url = fmt.Sprintf("%s/redfish/v1/Sessions", r.baseurl)
+		resp, err = r.http.Post(url, "application/json", bytes.NewBuffer(body))
+		if resp != nil {
+			defer resp.Body.Close()
+		}
+		if err != nil || resp.StatusCode != http.StatusCreated {
+			r.DisableSession()
+			return false
+		}
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		log.Debug("Session creation not supported or failed on %s (%s), falling back to Basic Auth", r.hostname, resp.Status)
+		r.DisableSession()
+		return false
+	}
+
+	err = json.NewDecoder(resp.Body).Decode(&session)
+	if err != nil {
+		log.Error("Error decoding response from %q: %v", url, err)
+		r.DisableSession()
+		return false
+	}
+
+	r.session.id = session.OdataId
+	r.session.token = resp.Header.Get("X-Auth-Token")
+
+	// iLO 4
+	if len(r.session.id) == 0 {
+		u, err := neturl.Parse(resp.Header.Get("Location"))
+		if err == nil {
+			r.session.id = u.Path
+		}
+	}
+
+	log.Debug("Successfully created Redfish session for %s", r.hostname)
 	return true
 }
 
 func (r *Redfish) DeleteSession() bool {
-	// Stateless HTTP Basic Auth: no session to delete
+	if len(r.session.token) == 0 || len(r.session.id) == 0 {
+		return true
+	}
+
+	url := fmt.Sprintf("%s%s", r.baseurl, r.session.id)
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return false
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Auth-Token", r.session.token)
+
+	resp, err := r.http.Do(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		log.Error("Failed to query %q: %v", url, err)
+		return false
+	}
+
+	r.session.id = ""
+	r.session.token = ""
 	return true
 }
 
 func (r *Redfish) RefreshSession() bool {
-	// Stateless HTTP Basic Auth: no session refresh needed
+	if r.session.disabled {
+		return false
+	}
+
+	if len(r.session.token) == 0 {
+		ok := r.CreateSession()
+		if !ok {
+			r.DisableSession()
+		}
+		return ok
+	}
+
+	url := fmt.Sprintf("%s%s", r.baseurl, r.session.id)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return false
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Auth-Token", r.session.token)
+
+	resp, err := r.http.Do(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		return false
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		ok := r.CreateSession()
+		if !ok {
+			r.DisableSession()
+		}
+		return ok
+	} else if resp.StatusCode != http.StatusOK {
+		log.Error("Unexpected status code %d during session refresh", resp.StatusCode)
+		return false
+	}
+
 	return true
 }
 
@@ -124,7 +247,11 @@ func (r *Redfish) Get(path string, res any) bool {
 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("OData-Version", "4.0")
-	req.SetBasicAuth(r.username, r.password)
+	if len(r.session.token) > 0 {
+		req.Header.Set("X-Auth-Token", r.session.token)
+	} else {
+		req.SetBasicAuth(r.username, r.password)
+	}
 
 	log.Debug("Querying %q", url)
 	resp, err := r.http.Do(req)
@@ -176,7 +303,11 @@ func (r *Redfish) Exists(path string) bool {
 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("OData-Version", "4.0")
-	req.SetBasicAuth(r.username, r.password)
+	if len(r.session.token) > 0 {
+		req.Header.Set("X-Auth-Token", r.session.token)
+	} else {
+		req.SetBasicAuth(r.username, r.password)
+	}
 
 	resp, err := r.http.Do(req)
 	if resp != nil {
