@@ -128,6 +128,7 @@ metrics:
     unified: false       # CONFIG_METRICS_SENSORS_UNIFIED=false
   power:
     enabled: false       # CONFIG_METRICS_POWER_ENABLED=false
+  # Events enables system event log collection (exports idrac_events_log_entry and idrac_sel_latest_event)
   events:
     enabled: false       # CONFIG_METRICS_EVENTS_ENABLED=false
     severity: warning    # CONFIG_METRICS_EVENTS_SEVERITY=warning

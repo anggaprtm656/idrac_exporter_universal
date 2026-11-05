@@ -7,6 +7,7 @@
 >
 > **Key Improvements in this Fork:**
 > * **Pure Stateless HTTP Basic Auth**: Replaced stateful Redfish sessions with stateless HTTP Basic Authentication headers. This completely eliminates session exhaustion errors (`401 Unauthorized` / `Max sessions exceeded`) and metric flapping on multi-vendor BMCs (tested on **Fujitsu iRMC**, **HPE iLO**, **Dell iDRAC**, and **Lenovo XCC**).
+> * **Native Hardware System Event Log (SEL) Integration**: Integrated multi-vendor SEL endpoint auto-discovery exposing `idrac_sel_latest_event` with real-time critical/warning event messages directly from the Redfish SEL buffer.
 > * Multi-vendor fleet monitoring optimizations.
 
 This is a simple Redfish (iDRAC, iLO, XClarity) exporter for [Prometheus](https://prometheus.io). The exporter uses the Redfish API to collect information and it supports the regular `/metrics` endpoint to expose metrics from the host passed via the `target` parameter. For example, to scrape metrics from a Redfish instance on the IP address `192.168.1.1` call the following URL address.
@@ -26,6 +27,22 @@ The program supports several different systems, because they all follow the Redf
 * Lenovo XClarity
 * Supermicro BMC
 
+
+## Quick Build & Update (Production Linux Server)
+Jika mengupdate binary di server production monitoring, cukup jalankan script 1-klik:
+
+```sh
+chmod +x update.sh
+sudo ./update.sh
+```
+
+Script ini otomatis melakukan:
+1. `go build -o idrac_exporter ./cmd/idrac_exporter`
+2. Stop service `idrac-exporter`
+3. Salin binary baru ke `/usr/local/bin/idrac_exporter`
+4. Start dan tampilkan status service `idrac-exporter`
+
+---
 
 ## Installation
 The exporter is written in [Go](https://golang.org) and it can be downloaded and compiled using:
@@ -295,6 +312,24 @@ The exporter has several different endpoints.
 | `/reload`    |            | Trigger a reload of the configuration file          |
 | `/discover`  |            | Endpoint for Prometheus Service Discovery           |
 | `/health`    |            | Returns http status 200 and nothing else            |
+
+
+## System Event Log (SEL) Monitoring
+
+The exporter natively auto-discovers and collects System Event Log (SEL) entries from various vendor BMCs:
+
+* **Dell PowerEdge**: iDRAC 7, iDRAC 8 (R730/R630), iDRAC 9 (R740/R640/R750/R760)
+* **Fujitsu Primergy**: iRMC S4, S5, S6
+* **HPE ProLiant**: iLO 4, 5, 6 (Integrated Management Log / IML)
+* **Lenovo ThinkSystem**: XClarity Controller (XCC)
+* **Supermicro BMC**
+
+### Exported SEL Metrics
+* `idrac_events_log_entry{id="...", message="...", severity="..."}`: Counter with Unix timestamp value for each event within `maxage`.
+* `idrac_sel_latest_event{status="Critical|Warning", severity="Critical|Warning", message="..."}`: Gauge (value `1.0`) containing the most recent Critical or Warning hardware event from the SEL buffer.
+
+### Standalone Python Micro-Exporter
+For lightweight or standalone use cases without running the full Go exporter binary, the standalone Python micro-exporter, systemd unit, and installer script are organized under [`tools/sel-exporter/`](tools/sel-exporter/).
 
 
 ## Prometheus Configuration

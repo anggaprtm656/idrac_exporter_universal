@@ -71,7 +71,8 @@ type Collector struct {
 	PowerControlInterval         *prometheus.Desc
 
 	// System event log
-	EventLogEntry *prometheus.Desc
+	EventLogEntry  *prometheus.Desc
+	SELLatestEvent *prometheus.Desc
 
 	// Storage
 	StorageInfo                  *prometheus.Desc
@@ -303,6 +304,11 @@ func NewCollector() *Collector {
 			prometheus.BuildFQName(prefix, "events", "log_entry"),
 			"Entry from the system event log",
 			[]string{"id", "message", "severity"}, nil,
+		),
+		SELLatestEvent: prometheus.NewDesc(
+			prometheus.BuildFQName(prefix, "sel", "latest_event"),
+			"Latest Critical or Warning event from iDRAC/iRMC/iLO SEL",
+			[]string{"status", "severity", "message"}, nil,
 		),
 		StorageInfo: prometheus.NewDesc(
 			prometheus.BuildFQName(prefix, "storage", "info"),
@@ -587,6 +593,7 @@ func (collector *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- collector.PowerControlAvgConsumedWatts
 	ch <- collector.PowerControlInterval
 	ch <- collector.EventLogEntry
+	ch <- collector.SELLatestEvent
 	ch <- collector.StorageInfo
 	ch <- collector.StorageHealth
 	ch <- collector.StorageDriveInfo

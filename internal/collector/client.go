@@ -236,35 +236,53 @@ func (client *Client) findAllEndpoints() bool {
 
 	// System event log
 	if client.metrics.Events.Enabled {
+		var candidatePaths []string
 		switch client.vendor {
 		case DELL:
-			{
-				pathA := "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Sel/Entries"
-				pathB := "/redfish/v1/Managers/iDRAC.Embedded.1/Logs/Sel"
-				if client.redfish.Exists(pathA) {
-					client.path.Event = pathA
-				} else if client.redfish.Exists(pathB) {
-					client.path.Event = pathB
-				}
+			candidatePaths = []string{
+				"/redfish/v1/Managers/iDRAC.Embedded.1/Logs/Sel",
+				"/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Sel/Entries",
+				"/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/SEL/Entries",
+				"/redfish/v1/Systems/System.Embedded.1/LogServices/Sel/Entries",
+				"/redfish/v1/Systems/System.Embedded.1/LogServices/SEL/Entries",
 			}
-		case LENOVO:
-			{
-				pathA := "/redfish/v1/Systems/1/LogServices/PlatformLog/Entries"
-				pathB := "/redfish/v1/Systems/1/LogServices/StandardLog/Entries"
-				if client.redfish.Exists(pathA) {
-					client.path.Event = pathA
-				} else if client.redfish.Exists(pathB) {
-					client.path.Event = pathB
-				}
+		case FUJITSU:
+			candidatePaths = []string{
+				"/redfish/v1/Systems/0/LogServices/SEL/Entries",
+				"/redfish/v1/Managers/0/LogServices/SEL/Entries",
+				"/redfish/v1/Systems/1/LogServices/SEL/Entries",
+				"/redfish/v1/Managers/iRMC/LogServices/SystemEventLog/Entries",
 			}
 		case HPE:
-			client.path.Event = "/redfish/v1/Systems/1/LogServices/IML/Entries"
-		case FUJITSU:
-			client.path.Event = "/redfish/v1/Managers/iRMC/LogServices/SystemEventLog/Entries"
+			candidatePaths = []string{
+				"/redfish/v1/Systems/1/LogServices/IML/Entries",
+				"/redfish/v1/Systems/1/LogServices/EventLog/Entries",
+			}
+		case LENOVO:
+			candidatePaths = []string{
+				"/redfish/v1/Managers/1/LogServices/SEL/Entries",
+				"/redfish/v1/Systems/1/LogServices/PlatformLog/Entries",
+				"/redfish/v1/Systems/1/LogServices/StandardLog/Entries",
+			}
 		case SUPERMICRO:
-			client.path.Event = "/redfish/v1/Systems/1/LogServices/Log1/Entries"
+			candidatePaths = []string{
+				"/redfish/v1/Managers/1/LogServices/SEL/Entries",
+				"/redfish/v1/Systems/1/LogServices/Log1/Entries",
+				"/redfish/v1/Systems/1/LogServices/StandardLog/Entries",
+			}
 		case ADVANTECH:
-			client.path.Event = "/redfish/v1/Systems/0/LogServices/Log/Entries"
+			candidatePaths = []string{
+				"/redfish/v1/Systems/0/LogServices/Log/Entries",
+			}
+		default:
+			candidatePaths = UniversalSELEndpoints
+		}
+
+		for _, p := range candidatePaths {
+			if client.redfish.Exists(p) {
+				client.path.Event = p
+				break
+			}
 		}
 	}
 
@@ -951,6 +969,10 @@ func (client *Client) RefreshEventLog(mc *Collector, ch chan<- prometheus.Metric
 
 	for v := range log.Items() {
 		mc.NewEventLogEntry(ch, v.Id, v.Message, v.Severity, v.Timestamp)
+	}
+
+	if latest := log.LatestWarningOrCritical(); latest != nil {
+		mc.NewSELLatestEvent(ch, latest.Severity, latest.Severity, latest.Message)
 	}
 
 	return true

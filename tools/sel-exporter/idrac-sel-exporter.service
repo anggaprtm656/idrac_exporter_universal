@@ -1,0 +1,19 @@
+[Unit]
+Description=Universal Hardware SEL (System Event Log) Redfish Micro-Exporter
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/idrac-sel-exporter.py
+Restart=always
+RestartSec=5
+
+# Opsional: Environment variables jika ingin override tanpa ubah script
+Environment=EXPORTER_PORT=9349
+Environment=IDRAC_USER=YOUR_IDRAC_USER
+Environment=IDRAC_PASSWORD=YOUR_IDRAC_PASSWORD
+Environment=EXPORTER_TIMEOUT=10
+
+[Install]
+WantedBy=multi-user.target

@@ -391,6 +391,17 @@ func (mc *Collector) NewEventLogEntry(ch chan<- prometheus.Metric, id string, me
 	)
 }
 
+func (mc *Collector) NewSELLatestEvent(ch chan<- prometheus.Metric, status string, severity string, message string) {
+	ch <- prometheus.MustNewConstMetric(
+		mc.SELLatestEvent,
+		prometheus.GaugeValue,
+		1.0,
+		status,
+		severity,
+		message,
+	)
+}
+
 func (mc *Collector) NewStorageInfo(ch chan<- prometheus.Metric, m *Storage) {
 	ch <- prometheus.MustNewConstMetric(
 		mc.StorageInfo,
